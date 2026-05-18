@@ -24,9 +24,48 @@
 
 已发布镜像支持 `linux/amd64` 与 `linux/arm64`，在 x86 服务器和 Apple Silicon / ARM Linux 设备上都会自动拉取匹配架构的版本。
 
+### chat_id — Session Tracking (Text Chat & Images)
+
+Both `/v1/chat/completions` (text) and `/v1/images/generations` (images) support an optional `chat_id` field for persistent multi-turn sessions.
+
+| Scenario | What to send | What you get back |
+|---|---|---|
+| Start a new session | Omit `chat_id` | `"chat_id": "<uuid>"` in response |
+| Continue a session | Include the `chat_id` from the previous response | No `chat_id` in response |
+
+**Text chat example (Python)**
+
+```python
+import requests
+
+BASE = "http://localhost:8000"
+KEY  = "chatgpt2api"
+
+# ── Turn 1: new session ─────────────────────────────────
+r1 = requests.post(f"{BASE}/v1/chat/completions",
+    headers={"Authorization": f"Bearer {KEY}"},
+    json={"model": "auto",
+          "messages": [{"role": "user", "content": "My name is Rana. Remember it."}]})
+data1 = r1.json()
+chat_id = data1["chat_id"]                  # e.g. "0cf317d1-..."
+print(data1["choices"][0]["message"]["content"])   # GPT acknowledges
+
+# ── Turn 2: continue same session ──────────────────────
+r2 = requests.post(f"{BASE}/v1/chat/completions",
+    headers={"Authorization": f"Bearer {KEY}"},
+    json={"model": "auto",
+          "messages": [{"role": "user", "content": "What is my name?"}],
+          "chat_id": chat_id})
+print(r2.json()["choices"][0]["message"]["content"])  # "Tumhara naam Rana hai."
+```
+
+Sessions expire after **24 hours** of inactivity and are saved to `data/chat_sessions.json` (survives restarts).
+
+---
+
 ### Contabo VPS (or any Ubuntu/Debian x86 server)
 
-One-time setup — SSH into your server and run:
+**Option A — Docker (simplest)**
 
 ```bash
 # 1. Install Docker (skip if already installed)
@@ -34,26 +73,61 @@ curl -fsSL https://get.docker.com | sh
 sudo usermod -aG docker $USER && newgrp docker
 
 # 2. Clone and start
-git clone https://github.com/basketikun/chatgpt2api.git
+git clone https://github.com/YOUR_USER/chatgpt2api.git   # your fork
 cd chatgpt2api
 docker compose up -d
 ```
 
-The service is now running on port **3000**.  
-Web panel: `http://<your-server-ip>:3000`  
-API: `http://<your-server-ip>:3000/v1`
-
-Set your `auth-key` in `config.json` (or via the `CHATGPT2API_AUTH_KEY` env var in `docker-compose.yml`) before making API calls.
-
-**Useful commands**
+The service runs on port **3000**. Web panel: `http://<server-ip>:3000`
 
 ```bash
-docker compose logs -f          # live logs
-docker compose pull && docker compose up -d   # update to latest image
-docker compose down             # stop
+docker compose logs -f                        # live logs
+docker compose pull && docker compose up -d   # update
+docker compose down                           # stop
 ```
 
-**Persist data across updates** — the `./data` directory is mounted as a Docker volume, so session files and account pools survive image updates automatically.
+**Option B — Bare-metal (no Docker)**
+
+Use the included one-command deploy script:
+
+```bash
+# SSH into your Contabo VPS, then:
+export REPO_URL=https://github.com/YOUR_USER/chatgpt2api.git
+export API_KEY=your_secret_key          # change this!
+export DOMAIN=api.yourdomain.com        # optional, for Nginx + SSL
+export EMAIL=you@mail.com               # optional, for Let's Encrypt
+
+bash <(curl -fsSL https://raw.githubusercontent.com/YOUR_USER/chatgpt2api/main/deploy/contabo_deploy.sh)
+```
+
+Or copy `deploy/contabo_deploy.sh` to the server and run it directly. After deploy:
+
+```bash
+# Add your ChatGPT account token
+curl -X POST http://localhost:8000/api/accounts \
+  -H "Authorization: Bearer your_secret_key" \
+  -H "Content-Type: application/json" \
+  -d '{"tokens":["YOUR_CHATGPT_ACCESS_TOKEN"]}'
+
+# Check status
+systemctl status chatgpt2api
+journalctl -u chatgpt2api -f
+```
+
+---
+
+### GitHub Fork — Push Your Changes
+
+```bash
+# From the chatgpt2api-fork/ directory:
+git remote add github https://github.com/YOUR_USER/chatgpt2api.git
+git push github main
+```
+
+If you want to push to a new repo:
+1. Create a new repo at https://github.com/new  
+2. Then: `git remote add github https://github.com/YOUR_USER/NEW_REPO.git`  
+3. Then: `git push github main`
 
 ---
 

@@ -5,6 +5,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from services.config import DATA_DIR
 
@@ -12,13 +13,19 @@ SESSION_TTL_SECONDS = 24 * 60 * 60  # 24 hours
 
 
 class ChatSessionService:
-    """Maps caller-visible chat_id values to upstream ChatGPT conversation_ids.
+    """Maps caller-visible chat_id values to session state.
 
-    On the first image request (no chat_id supplied) a new UUID is generated
-    and returned to the caller in the response body.  On every subsequent
-    request the caller passes that same chat_id back; the service resolves the
-    stored conversation_id so that the upstream generation continues inside the
-    same ChatGPT conversation, preserving character / style consistency.
+    Image sessions:
+        Stores the upstream ChatGPT conversation_id so that follow-up image
+        requests continue inside the same conversation, preserving character /
+        style consistency.
+
+    Text sessions:
+        Stores the full message history so that follow-up text chat requests
+        automatically include prior turns without the caller needing to manage
+        history themselves.  (The upstream ChatGPT endpoint has
+        history_and_training_disabled=True, so conversation_ids are ephemeral
+        and cannot be reused across requests.)
 
     Sessions expire after SESSION_TTL_SECONDS of inactivity and are persisted
     to ``data/chat_sessions.json`` so they survive server restarts.
@@ -36,17 +43,25 @@ class ChatSessionService:
     def generate_id(self) -> str:
         return str(uuid.uuid4())
 
-    def get_conversation_id(self, chat_id: str) -> str | None:
+    def _get_entry(self, chat_id: str) -> dict | None:
         chat_id = str(chat_id or "").strip()
         if not chat_id:
             return None
+        entry = self._sessions.get(chat_id)
+        if not entry:
+            return None
+        if time.time() - float(entry.get("updated_at") or 0) > self.ttl_seconds:
+            self._sessions.pop(chat_id, None)
+            self._save_locked()
+            return None
+        return entry
+
+    # ── Image session helpers ────────────────────────────────────────────────
+
+    def get_conversation_id(self, chat_id: str) -> str | None:
         with self._lock:
-            entry = self._sessions.get(chat_id)
+            entry = self._get_entry(chat_id)
             if not entry:
-                return None
-            if time.time() - float(entry.get("updated_at") or 0) > self.ttl_seconds:
-                self._sessions.pop(chat_id, None)
-                self._save_locked()
                 return None
             return str(entry.get("conversation_id") or "") or None
 
@@ -56,11 +71,38 @@ class ChatSessionService:
         if not chat_id or not conversation_id:
             return
         with self._lock:
-            self._sessions[chat_id] = {
-                "conversation_id": conversation_id,
-                "updated_at": time.time(),
-            }
+            existing = self._sessions.get(chat_id, {})
+            existing["conversation_id"] = conversation_id
+            existing["updated_at"] = time.time()
+            self._sessions[chat_id] = existing
             self._save_locked()
+
+    # ── Text session helpers ─────────────────────────────────────────────────
+
+    def get_history(self, chat_id: str) -> list[dict[str, Any]]:
+        """Return stored message history for *chat_id*, or an empty list."""
+        with self._lock:
+            entry = self._get_entry(chat_id)
+            if not entry:
+                return []
+            history = entry.get("history")
+            if isinstance(history, list):
+                return list(history)
+            return []
+
+    def save_history(self, chat_id: str, history: list[dict[str, Any]]) -> None:
+        """Persist *history* (all messages including the latest exchange)."""
+        chat_id = str(chat_id or "").strip()
+        if not chat_id:
+            return
+        with self._lock:
+            existing = self._sessions.get(chat_id, {})
+            existing["history"] = history
+            existing["updated_at"] = time.time()
+            self._sessions[chat_id] = existing
+            self._save_locked()
+
+    # ── Persistence ──────────────────────────────────────────────────────────
 
     def _load_locked(self) -> dict[str, dict]:
         if not self.path.exists():

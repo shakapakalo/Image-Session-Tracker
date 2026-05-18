@@ -6,11 +6,11 @@ from typing import Any, Iterable, Iterator
 
 from fastapi import HTTPException
 
+from services.chat_session_service import chat_session_service
 from services.protocol.conversation import (
     ConversationRequest,
     ImageOutput,
     collect_image_outputs,
-    collect_text,
     count_message_tokens,
     count_text_tokens,
     encode_images,
@@ -19,10 +19,24 @@ from services.protocol.conversation import (
     stream_text_deltas,
     text_backend,
 )
-from utils.helper import build_chat_image_markdown_content, extract_chat_image, extract_chat_prompt, is_image_chat_request, parse_image_count
+from utils.helper import (
+    build_chat_image_markdown_content,
+    extract_chat_image,
+    extract_chat_prompt,
+    is_image_chat_request,
+    parse_image_count,
+)
 
 
-def completion_chunk(model: str, delta: dict[str, Any], finish_reason: str | None = None, completion_id: str = "", created: int | None = None) -> dict[str, Any]:
+# ── OpenAI-format helpers ────────────────────────────────────────────────────
+
+def completion_chunk(
+    model: str,
+    delta: dict[str, Any],
+    finish_reason: str | None = None,
+    completion_id: str = "",
+    created: int | None = None,
+) -> dict[str, Any]:
     return {
         "id": completion_id or f"chatcmpl-{uuid.uuid4().hex}",
         "object": "chat.completion.chunk",
@@ -37,10 +51,11 @@ def completion_response(
     content: str,
     created: int | None = None,
     messages: list[dict[str, Any]] | None = None,
+    chat_id: str | None = None,
 ) -> dict[str, Any]:
     prompt_tokens = count_message_tokens(messages, model) if messages else 0
     completion_tokens = count_text_tokens(content, model) if messages else 0
-    return {
+    resp: dict[str, Any] = {
         "id": f"chatcmpl-{uuid.uuid4().hex}",
         "object": "chat.completion",
         "created": created or int(time.time()),
@@ -56,9 +71,32 @@ def completion_response(
             "total_tokens": prompt_tokens + completion_tokens,
         },
     }
+    if chat_id:
+        resp["chat_id"] = chat_id
+    return resp
 
 
-def stream_text_chat_completion(backend, messages: list[dict[str, Any]], model: str) -> Iterator[dict[str, Any]]:
+# ── Text chat helpers ────────────────────────────────────────────────────────
+
+def collect_chat_content(chunks: Iterable[dict[str, Any]]) -> str:
+    """Collect text from streamed chat completion chunks (used by Anthropic adapter)."""
+    parts: list[str] = []
+    for chunk in chunks:
+        choices = chunk.get("choices")
+        first = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+        delta = first.get("delta") if isinstance(first.get("delta"), dict) else {}
+        content = str(delta.get("content") or "")
+        if content:
+            parts.append(content)
+    return "".join(parts)
+
+
+def stream_text_chat_completion(
+    backend,
+    messages: list[dict[str, Any]],
+    model: str,
+) -> Iterator[dict[str, Any]]:
+    """Backward-compatible wrapper used by the Anthropic adapter (no session)."""
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
     sent_role = False
@@ -74,27 +112,69 @@ def stream_text_chat_completion(backend, messages: list[dict[str, Any]], model: 
     yield completion_chunk(model, {}, "stop", completion_id, created)
 
 
-def collect_chat_content(chunks: Iterable[dict[str, Any]]) -> str:
-    parts: list[str] = []
-    for chunk in chunks:
-        choices = chunk.get("choices")
-        first = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
-        delta = first.get("delta") if isinstance(first.get("delta"), dict) else {}
-        content = str(delta.get("content") or "")
-        if content:
-            parts.append(content)
-    return "".join(parts)
-
-
 def chat_messages_from_body(body: dict[str, Any]) -> list[dict[str, Any]]:
     messages = body.get("messages")
     if isinstance(messages, list) and messages:
-        return [message for message in messages if isinstance(message, dict)]
+        return [m for m in messages if isinstance(m, dict)]
     prompt = str(body.get("prompt") or "").strip()
     if prompt:
         return [{"role": "user", "content": prompt}]
     raise HTTPException(status_code=400, detail={"error": "messages or prompt is required"})
 
+
+def text_chat_parts(body: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    model = str(body.get("model") or "auto").strip() or "auto"
+    messages = normalize_messages(chat_messages_from_body(body))
+    return model, messages
+
+
+def _build_full_messages(
+    history: list[dict[str, Any]],
+    new_messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Prepend stored history to the caller's new messages, deduplicating."""
+    if not history:
+        return new_messages
+    return list(history) + list(new_messages)
+
+
+def _stream_text_with_session(
+    messages: list[dict[str, Any]],
+    model: str,
+    chat_id: str,
+    is_new_session: bool,
+) -> Iterator[dict[str, Any]]:
+    """Stream chat completion chunks and persist session history afterward."""
+    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+    created = int(time.time())
+    sent_role = False
+    reply_parts: list[str] = []
+
+    request = ConversationRequest(model=model, messages=messages)
+    for delta_text in stream_text_deltas(text_backend(), request):
+        reply_parts.append(delta_text)
+        if not sent_role:
+            sent_role = True
+            yield completion_chunk(model, {"role": "assistant", "content": delta_text}, None, completion_id, created)
+        else:
+            yield completion_chunk(model, {"content": delta_text}, None, completion_id, created)
+
+    if not sent_role:
+        yield completion_chunk(model, {"role": "assistant", "content": ""}, None, completion_id, created)
+    yield completion_chunk(model, {}, "stop", completion_id, created)
+
+    # Persist updated history after stream ends
+    reply_text = "".join(reply_parts)
+    if reply_text:
+        updated_history = list(messages) + [{"role": "assistant", "content": reply_text}]
+        chat_session_service.save_history(chat_id, updated_history)
+
+    # Emit session chunk for new sessions so streaming clients can capture chat_id
+    if is_new_session and reply_text:
+        yield {"object": "chat.session", "chat_id": chat_id}
+
+
+# ── Image chat helpers ───────────────────────────────────────────────────────
 
 def chat_image_args(body: dict[str, Any]) -> tuple[str, str, int, list[tuple[bytes, str, str]]]:
     model = str(body.get("model") or "gpt-image-2").strip() or "gpt-image-2"
@@ -106,12 +186,6 @@ def chat_image_args(body: dict[str, Any]) -> tuple[str, str, int, list[tuple[byt
         for idx, (data, mime) in enumerate(extract_chat_image(body), start=1)
     ]
     return model, prompt, parse_image_count(body.get("n")), images
-
-
-def text_chat_parts(body: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
-    model = str(body.get("model") or "auto").strip() or "auto"
-    messages = normalize_messages(chat_messages_from_body(body))
-    return model, messages
 
 
 def image_result_content(result: dict[str, Any]) -> str:
@@ -171,14 +245,45 @@ def stream_image_chat_completion(image_outputs: Iterable[ImageOutput], model: st
     yield completion_chunk(model, {}, "stop", completion_id, created)
 
 
+# ── Main handler ─────────────────────────────────────────────────────────────
+
 def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
+    chat_id = str(body.get("chat_id") or "").strip()
+    is_new_session = not chat_id
+    if is_new_session:
+        chat_id = chat_session_service.generate_id()
+
+    # ── Image requests: chat_id not needed (no cross-request context) ──────
     if body.get("stream"):
         if is_image_chat_request(body):
             return image_chat_events(body)
-        model, messages = text_chat_parts(body)
-        return stream_text_chat_completion(text_backend(), messages, model)
+
+        model, new_messages = text_chat_parts(body)
+        history = chat_session_service.get_history(chat_id) if not is_new_session else []
+        full_messages = _build_full_messages(history, new_messages)
+        return _stream_text_with_session(
+            messages=full_messages,
+            model=model,
+            chat_id=chat_id,
+            is_new_session=is_new_session,
+        )
+
     if is_image_chat_request(body):
         return image_chat_response(body)
-    model, messages = text_chat_parts(body)
-    request = ConversationRequest(model=model, messages=messages)
-    return completion_response(model, collect_text(text_backend(), request), messages=messages)
+
+    # ── Non-streaming text chat ────────────────────────────────────────────
+    model, new_messages = text_chat_parts(body)
+    history = chat_session_service.get_history(chat_id) if not is_new_session else []
+    full_messages = _build_full_messages(history, new_messages)
+
+    request = ConversationRequest(model=model, messages=full_messages)
+    content = "".join(stream_text_deltas(text_backend(), request))
+
+    if content:
+        updated_history = list(full_messages) + [{"role": "assistant", "content": content}]
+        chat_session_service.save_history(chat_id, updated_history)
+
+    return completion_response(
+        model, content, messages=full_messages,
+        chat_id=chat_id if is_new_session and content else None,
+    )

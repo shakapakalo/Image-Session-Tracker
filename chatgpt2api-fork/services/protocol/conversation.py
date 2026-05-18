@@ -502,7 +502,16 @@ def text_backend() -> OpenAIBackendAPI:
     return OpenAIBackendAPI(access_token=account_service.get_text_access_token())
 
 
-def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) -> Iterator[str]:
+def stream_text_deltas(
+    backend: OpenAIBackendAPI,
+    request: ConversationRequest,
+    conv_id_out: list[str] | None = None,
+) -> Iterator[str]:
+    """Yield text delta strings.
+
+    If *conv_id_out* is provided it will contain the upstream conversation_id
+    after the generator is fully consumed (useful for session persistence).
+    """
     attempted_tokens: set[str] = set()
     token = getattr(backend, "access_token", "")
     emitted = False
@@ -513,13 +522,27 @@ def stream_text_deltas(backend: OpenAIBackendAPI, request: ConversationRequest) 
             attempted_tokens.add(token)
         try:
             active_backend = OpenAIBackendAPI(access_token=token)
-            for event in conversation_events(active_backend, messages=request.messages, model=request.model, prompt=request.prompt):
+            last_conv_id = ""
+            for event in conversation_events(
+                active_backend,
+                messages=request.messages,
+                model=request.model,
+                prompt=request.prompt,
+                conversation_id=request.conversation_id,
+            ):
+                if event.get("conversation_id"):
+                    last_conv_id = str(event["conversation_id"])
                 if event.get("type") != "conversation.delta":
                     continue
                 delta = str(event.get("delta") or "")
                 if delta:
                     emitted = True
                     yield delta
+            if conv_id_out is not None and last_conv_id:
+                if conv_id_out:
+                    conv_id_out[0] = last_conv_id
+                else:
+                    conv_id_out.append(last_conv_id)
             account_service.mark_text_used(token)
             return
         except Exception as exc:

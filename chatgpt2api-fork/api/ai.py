@@ -37,6 +37,7 @@ class ChatCompletionRequest(BaseModel):
     stream: bool | None = None
     modalities: list[str] | None = None
     messages: list[dict[str, object]] | None = None
+    chat_id: str | None = None
 
 
 class ResponseCreateRequest(BaseModel):
