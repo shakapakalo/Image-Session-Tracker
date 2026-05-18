@@ -30,3 +30,11 @@ NODE_ENV = "production"
 
 [services.production.health.startup]
 path = "/api/healthz"
+
+[[services]]
+localPort = 8000
+name = "ChatGPT2API"
+paths = ["/"]
+
+[services.development]
+run = "cd /home/runner/workspace/chatgpt2api-fork && PORT=8000 python main.py"
