@@ -73,6 +73,15 @@ $UV python install 3.13
 $UV sync --no-dev
 echo "      Python: $($UV run python --version)"
 
+# ── 4b. Recreate web_dist symlink ──────────────────────
+echo "      Setting up web panel..."
+if [ -d "$APP_DIR/web/out" ]; then
+    ln -sfn web/out "$APP_DIR/web_dist"
+    echo "      web_dist → web/out ✓"
+else
+    echo "      WARNING: web/out not found, panel may not load"
+fi
+
 # ── 5. Config + data dirs ──────────────────────────────
 echo "[5/7] Creating config and data directories..."
 mkdir -p "$APP_DIR/data"
