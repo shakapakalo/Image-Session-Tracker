@@ -18,7 +18,7 @@ REPO_URL="${REPO_URL:-https://github.com/shakapakalo/Image-Session-Tracker.git}"
 CLONE_DIR="/opt/chatgpt2api-repo"
 APP_DIR="${CLONE_DIR}/chatgpt2api-fork"   # Python app lives here
 SERVICE_NAME="chatgpt2api"
-APP_PORT="${APP_PORT:-8000}"
+APP_PORT="${APP_PORT:-7637}"
 CHATGPT2API_AUTH_KEY="${CHATGPT2API_AUTH_KEY:-}"
 
 # ── Validate required inputs ─────────────────────────────────────────────────
