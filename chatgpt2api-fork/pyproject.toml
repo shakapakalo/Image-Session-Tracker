@@ -21,7 +21,3 @@ dependencies = [
 dev = [
     "httpx>=0.28.1",
 ]
-
-[[tool.uv.index]]
-url = "https://mirrors.aliyun.com/pypi/simple"
-default = true

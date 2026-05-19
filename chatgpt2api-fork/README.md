@@ -65,53 +65,52 @@ Sessions expire after **24 hours** of inactivity and are saved to `data/chat_ses
 
 ### Contabo VPS (or any Ubuntu/Debian x86 server)
 
-**Option A — Docker (simplest)**
+**Option A — Bare-metal (recommended for Contabo)**
+
+SSH into your VPS and run these commands:
 
 ```bash
-# 1. Install Docker (skip if already installed)
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER && newgrp docker
+# Step 1 — set your variables
+export CHATGPT2API_AUTH_KEY="your_secret_key"        # ← change this!
+export REPO_URL="https://github.com/YOUR_USER/chatgpt2api.git"
+export DOMAIN="api.yourdomain.com"   # optional — for Nginx + SSL
+export EMAIL="you@mail.com"          # optional — for Let's Encrypt SSL
 
-# 2. Clone and start
-git clone https://github.com/YOUR_USER/chatgpt2api.git   # your fork
-cd chatgpt2api
-docker compose up -d
-```
-
-The service runs on port **3000**. Web panel: `http://<server-ip>:3000`
-
-```bash
-docker compose logs -f                        # live logs
-docker compose pull && docker compose up -d   # update
-docker compose down                           # stop
-```
-
-**Option B — Bare-metal (no Docker)**
-
-Use the included one-command deploy script:
-
-```bash
-# SSH into your Contabo VPS, then:
-export REPO_URL=https://github.com/YOUR_USER/chatgpt2api.git
-export API_KEY=your_secret_key          # change this!
-export DOMAIN=api.yourdomain.com        # optional, for Nginx + SSL
-export EMAIL=you@mail.com               # optional, for Let's Encrypt
-
+# Step 2 — run the deploy script
 bash <(curl -fsSL https://raw.githubusercontent.com/YOUR_USER/chatgpt2api/main/deploy/contabo_deploy.sh)
 ```
 
-Or copy `deploy/contabo_deploy.sh` to the server and run it directly. After deploy:
+What the script does automatically:
+- Installs `uv` (Python package manager) and Python 3.13
+- Clones your repo to `/opt/chatgpt2api`
+- Installs all dependencies from `pyproject.toml`
+- Creates a systemd service (auto-restarts on crash/reboot)
+- Configures Nginx as a reverse proxy on port 80
+- Optionally sets up Let's Encrypt SSL (HTTPS)
+
+After deploy — **add your ChatGPT token**:
 
 ```bash
-# Add your ChatGPT account token
 curl -X POST http://localhost:8000/api/accounts \
   -H "Authorization: Bearer your_secret_key" \
   -H "Content-Type: application/json" \
   -d '{"tokens":["YOUR_CHATGPT_ACCESS_TOKEN"]}'
+```
 
-# Check status
-systemctl status chatgpt2api
-journalctl -u chatgpt2api -f
+Useful commands:
+```bash
+systemctl status chatgpt2api      # check service status
+journalctl -u chatgpt2api -f      # live logs
+systemctl restart chatgpt2api     # restart
+```
+
+**Option B — Docker**
+
+```bash
+curl -fsSL https://get.docker.com | sh
+git clone https://github.com/YOUR_USER/chatgpt2api.git
+cd chatgpt2api
+docker compose up -d
 ```
 
 ---
@@ -119,15 +118,15 @@ journalctl -u chatgpt2api -f
 ### GitHub Fork — Push Your Changes
 
 ```bash
-# From the chatgpt2api-fork/ directory:
+# From inside the chatgpt2api-fork/ directory:
 git remote add github https://github.com/YOUR_USER/chatgpt2api.git
 git push github main
 ```
 
-If you want to push to a new repo:
-1. Create a new repo at https://github.com/new  
-2. Then: `git remote add github https://github.com/YOUR_USER/NEW_REPO.git`  
-3. Then: `git push github main`
+To create a brand-new repo:
+1. Go to https://github.com/new and create the repo
+2. `git remote add github https://github.com/YOUR_USER/NEW_REPO_NAME.git`
+3. `git push github main`
 
 ---
 
