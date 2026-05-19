@@ -67,32 +67,26 @@ Sessions expire after **24 hours** of inactivity and are saved to `data/chat_ses
 
 **Option A — Bare-metal (recommended for Contabo)**
 
-SSH into your VPS and run these commands:
+SSH into your VPS and paste this entire block (change `ranaji` to your own key):
 
 ```bash
-# Step 1 — set your variables
-export CHATGPT2API_AUTH_KEY="your_secret_key"        # ← change this!
-export REPO_URL="https://github.com/YOUR_USER/chatgpt2api.git"
-export DOMAIN="api.yourdomain.com"   # optional — for Nginx + SSL
-export EMAIL="you@mail.com"          # optional — for Let's Encrypt SSL
+export CHATGPT2API_AUTH_KEY="ranaji"
 
-# Step 2 — run the deploy script
-bash <(curl -fsSL https://raw.githubusercontent.com/YOUR_USER/chatgpt2api/main/deploy/contabo_deploy.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/shakapakalo/Image-Session-Tracker/main/chatgpt2api-fork/deploy/contabo_deploy.sh)
 ```
 
 What the script does automatically:
 - Installs `uv` (Python package manager) and Python 3.13
-- Clones your repo to `/opt/chatgpt2api`
-- Installs all dependencies from `pyproject.toml`
+- Clones repo → `/opt/chatgpt2api-repo/chatgpt2api-fork`
+- Installs all dependencies
 - Creates a systemd service (auto-restarts on crash/reboot)
 - Configures Nginx as a reverse proxy on port 80
-- Optionally sets up Let's Encrypt SSL (HTTPS)
 
 After deploy — **add your ChatGPT token**:
 
 ```bash
 curl -X POST http://localhost:8000/api/accounts \
-  -H "Authorization: Bearer your_secret_key" \
+  -H "Authorization: Bearer ranaji" \
   -H "Content-Type: application/json" \
   -d '{"tokens":["YOUR_CHATGPT_ACCESS_TOKEN"]}'
 ```
@@ -102,15 +96,6 @@ Useful commands:
 systemctl status chatgpt2api      # check service status
 journalctl -u chatgpt2api -f      # live logs
 systemctl restart chatgpt2api     # restart
-```
-
-**Option B — Docker**
-
-```bash
-curl -fsSL https://get.docker.com | sh
-git clone https://github.com/YOUR_USER/chatgpt2api.git
-cd chatgpt2api
-docker compose up -d
 ```
 
 ---
