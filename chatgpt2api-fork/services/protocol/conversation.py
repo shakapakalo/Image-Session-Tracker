@@ -703,6 +703,141 @@ def stream_image_outputs_with_pool(request: ConversationRequest) -> Iterator[Ima
         raise ImageGenerationError(image_stream_error_message(last_error))
 
 
+def stream_vision_outputs(
+    backend: OpenAIBackendAPI,
+    request: ConversationRequest,
+    index: int = 1,
+    total: int = 1,
+) -> Iterator[ImageOutput]:
+    """Stream outputs for a vision (image-in → text or image-out) conversation.
+
+    Uses the regular ChatGPT text endpoint (no picture_v2 system hint).
+    After ChatGPT replies, inspects whether it returned plain text or invoked
+    the image tool and yields the appropriate ImageOutput kind.
+    """
+    last: dict[str, Any] = {}
+    for event in conversation_events(
+        backend,
+        messages=request.messages,
+        model=request.model,
+        conversation_id=request.conversation_id,
+        history_and_training_disabled=request.history_and_training_disabled,
+    ):
+        last = event
+        if event.get("type") == "conversation.delta":
+            yield ImageOutput(
+                kind="progress",
+                model=request.model,
+                index=index,
+                total=total,
+                text=str(event.get("delta") or ""),
+                upstream_event_type="conversation.delta",
+            )
+            continue
+        if event.get("type") == "conversation.event":
+            raw = event.get("raw")
+            raw_type = str(raw.get("type") or "") if isinstance(raw, dict) else ""
+            yield ImageOutput(
+                kind="progress",
+                model=request.model,
+                index=index,
+                total=total,
+                upstream_event_type=raw_type,
+            )
+
+    conversation_id = str(last.get("conversation_id") or "")
+    file_ids = [str(item) for item in last.get("file_ids") or []]
+    sediment_ids = [str(item) for item in last.get("sediment_ids") or []]
+    message = str(last.get("text") or "").strip()
+    is_text_response = last.get("tool_invoked") is False or last.get("turn_use_case") == "text"
+
+    logger.info({
+        "event": "vision_stream_resolve",
+        "conversation_id": conversation_id,
+        "file_ids": file_ids,
+        "sediment_ids": sediment_ids,
+        "tool_invoked": last.get("tool_invoked"),
+        "turn_use_case": last.get("turn_use_case"),
+    })
+
+    if message and not file_ids and not sediment_ids and (last.get("blocked") or is_text_response):
+        yield ImageOutput(
+            kind="message",
+            model=request.model,
+            index=index,
+            total=total,
+            text=message,
+            conversation_id=conversation_id,
+        )
+        return
+
+    image_urls = backend.resolve_conversation_image_urls(conversation_id, file_ids, sediment_ids)
+    if image_urls:
+        image_items = [
+            {"b64_json": base64.b64encode(image_data).decode("ascii")}
+            for image_data in backend.download_image_bytes(image_urls)
+        ]
+        data = format_image_result(
+            image_items,
+            request.prompt or "",
+            request.response_format,
+            request.base_url,
+            int(time.time()),
+        )["data"]
+        if data:
+            yield ImageOutput(
+                kind="result",
+                model=request.model,
+                index=index,
+                total=total,
+                data=data,
+                conversation_id=conversation_id,
+            )
+        return
+
+    if message:
+        yield ImageOutput(
+            kind="message",
+            model=request.model,
+            index=index,
+            total=total,
+            text=message,
+            conversation_id=conversation_id,
+        )
+
+
+def stream_vision_outputs_with_pool(request: ConversationRequest) -> Iterator[ImageOutput]:
+    """Like stream_image_outputs_with_pool but for vision (multimodal) requests.
+
+    Rotates through text-pool accounts and retries on invalid-token errors.
+    """
+    attempted_tokens: set[str] = set()
+    token = account_service.get_text_access_token()
+    emitted = False
+
+    while True:
+        if token and token in attempted_tokens:
+            raise ImageGenerationError("no available text account for vision request")
+        if token:
+            attempted_tokens.add(token)
+        try:
+            backend = OpenAIBackendAPI(access_token=token)
+            for output in stream_vision_outputs(backend, request):
+                emitted = True
+                yield output
+            account_service.mark_text_used(token)
+            return
+        except Exception as exc:
+            account_service.mark_text_used(token)
+            err_msg = str(exc)
+            if not emitted and is_token_invalid_error(err_msg):
+                account_service.remove_invalid_token(token, "vision_stream")
+                token = account_service.get_text_access_token(attempted_tokens)
+                if token:
+                    continue
+            raise
+
+
 def stream_image_chunks(outputs: Iterable[ImageOutput]) -> Iterator[dict[str, Any]]:
     for output in outputs:
         yield output.to_chunk()

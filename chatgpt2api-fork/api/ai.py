@@ -16,6 +16,7 @@ from services.protocol import (
     openai_v1_models,
     openai_v1_response,
 )
+from utils.helper import has_vision_content
 
 
 class ImageGenerationRequest(BaseModel):
@@ -110,7 +111,9 @@ def create_router() -> APIRouter:
         payload = body.model_dump(mode="python")
         model = str(payload.get("model") or "auto")
         request_preview = request_text(payload.get("prompt"), payload.get("messages"))
-        call = LoggedCall(identity, "/v1/chat/completions", model, "文本生成", request_text=request_preview)
+        call_type = "视觉理解" if has_vision_content(payload) else "文本生成"
+        call = LoggedCall(identity, "/v1/chat/completions", model, call_type, request_text=request_preview)
+        payload["base_url"] = resolve_image_base_url(request)
         await filter_or_log(call, request_preview)
         return await call.run(openai_v1_chat_complete.handle, payload)
 

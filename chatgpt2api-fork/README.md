@@ -32,6 +32,7 @@
 | **URL-only image responses** | All image endpoints (`/v1/images/generations`, `/v1/images/edits`) always return a hosted **URL** — never base64. Only the **most recently generated image** is returned (last item in `data[]`). |
 | **Chat sessions in ChatGPT app** | `/v1/chat/completions` text chat uses a real ChatGPT `conversation_id` (`history_and_training_disabled=false`). Each API chat session appears as a visible conversation inside the ChatGPT web interface — just like image sessions. |
 | **chat_id session tracking** | Both text chat and image endpoints support `chat_id` for multi-turn continuity (see below). |
+| **Vision (image + prompt)** | Send an image together with a text prompt to `/v1/chat/completions`. The response auto-detects whether ChatGPT returned text (analysis/description) or generated a new image — returning text or a hosted URL accordingly. The real ChatGPT `conversation_id` is always included so follow-up messages continue in the same thread. |
 
 ---
 
@@ -72,6 +73,146 @@ print(r2.json()["choices"][0]["message"]["content"])  # "Tumhara naam Rana hai."
 ```
 
 Sessions expire after **24 hours** of inactivity and are saved to `data/chat_sessions.json` (survives restarts).
+
+---
+
+### Vision — Image + Prompt Together
+
+Send an image **and** a text prompt in a single `/v1/chat/completions` request. ChatGPT will:
+- Return **text** if you asked it to describe / analyse / answer about the image.
+- Return a **hosted image URL** if you asked it to edit, redraw, or generate based on the image.
+
+The response always includes the real `conversation_id` (UUID) so you can continue the chat thread in follow-up requests — and the conversation appears in the ChatGPT web app just like normal chats.
+
+**Detection rule:** if `messages` contains an `image_url` content part and the model is **not** `gpt-image-2`, the request is automatically routed through the vision pipeline.
+
+#### Request format
+
+```json
+{
+  "model": "auto",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "data:image/png;base64,<BASE64_DATA>"
+          }
+        },
+        {
+          "type": "text",
+          "text": "What is in this image?"
+        }
+      ]
+    }
+  ]
+}
+```
+
+The `image_url.url` field accepts:
+- `data:image/png;base64,<BASE64>` — base64-encoded image (any browser / client can produce this)
+- `https://...` — a publicly accessible image URL (the server downloads it)
+
+#### Response: text reply
+
+```json
+{
+  "id": "chatcmpl-...",
+  "object": "chat.completion",
+  "model": "auto",
+  "choices": [{"message": {"role": "assistant", "content": "This image shows a red warrior..."}}],
+  "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
+  "chat_id": "0cf317d1-...",
+  "response_type": "text"
+}
+```
+
+#### Response: image generated
+
+```json
+{
+  "id": "chatcmpl-...",
+  "object": "chat.completion",
+  "model": "auto",
+  "choices": [{"message": {"role": "assistant", "content": "https://217.77.8.115/images/abc.png"}}],
+  "conversation_id": "550e8400-e29b-41d4-a716-446655440000",
+  "chat_id": "0cf317d1-...",
+  "image_url": "https://217.77.8.115/images/abc.png",
+  "response_type": "image"
+}
+```
+
+#### Python example — vision with multi-turn follow-up
+
+```python
+import base64, requests
+
+BASE = "http://217.77.8.115"
+KEY  = "ranaji"
+
+# Encode a local image as base64
+with open("photo.jpg", "rb") as f:
+    b64 = base64.b64encode(f.read()).decode()
+
+# ── Turn 1: ask about the image ─────────────────────────────
+r1 = requests.post(f"{BASE}/v1/chat/completions",
+    headers={"Authorization": f"Bearer {KEY}"},
+    json={
+        "model": "auto",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+                {"type": "text", "text": "What is in this image?"}
+            ]
+        }]
+    })
+
+data1 = r1.json()
+print("Response type:", data1.get("response_type"))   # "text"
+print("Answer:", data1["choices"][0]["message"]["content"])
+print("conversation_id:", data1["conversation_id"])   # real ChatGPT UUID
+
+chat_id = data1["chat_id"]                            # save for follow-up
+
+# ── Turn 2: continue the same thread — no image needed now ──
+r2 = requests.post(f"{BASE}/v1/chat/completions",
+    headers={"Authorization": f"Bearer {KEY}"},
+    json={
+        "model": "auto",
+        "chat_id": chat_id,                           # continue same session
+        "messages": [{"role": "user", "content": "Now make it look like a watercolour painting"}]
+    })
+
+data2 = r2.json()
+print("Response type:", data2.get("response_type"))   # "image"
+print("Image URL:", data2.get("image_url"))           # https://217.77.8.115/images/...
+```
+
+#### curl example — quick vision test
+
+```bash
+# Encode any image
+B64=$(base64 -w0 /path/to/photo.jpg)
+
+curl -s http://217.77.8.115/v1/chat/completions \
+  -H "Authorization: Bearer ranaji" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"model\": \"auto\",
+    \"messages\": [{
+      \"role\": \"user\",
+      \"content\": [
+        {\"type\": \"image_url\", \"image_url\": {\"url\": \"data:image/jpeg;base64,$B64\"}},
+        {\"type\": \"text\",      \"text\": \"What is in this image?\"}
+      ]
+    }]
+  }" | python3 -m json.tool
+```
+
+---
 
 **Image URL example**
 

@@ -17,12 +17,14 @@ from services.protocol.conversation import (
     normalize_messages,
     stream_image_outputs_with_pool,
     stream_text_deltas,
+    stream_vision_outputs_with_pool,
     text_backend,
 )
 from utils.helper import (
     build_chat_image_markdown_content,
     extract_chat_image,
     extract_chat_prompt,
+    has_vision_content,
     is_image_chat_request,
     parse_image_count,
 )
@@ -52,6 +54,7 @@ def completion_response(
     created: int | None = None,
     messages: list[dict[str, Any]] | None = None,
     chat_id: str | None = None,
+    conversation_id: str | None = None,
 ) -> dict[str, Any]:
     prompt_tokens = count_message_tokens(messages, model) if messages else 0
     completion_tokens = count_text_tokens(content, model) if messages else 0
@@ -73,6 +76,8 @@ def completion_response(
     }
     if chat_id:
         resp["chat_id"] = chat_id
+    if conversation_id:
+        resp["conversation_id"] = conversation_id
     return resp
 
 
@@ -184,7 +189,7 @@ def _stream_text_with_session(
 
     # Emit session chunk for new sessions so streaming clients can capture chat_id
     if is_new_session and new_conv_id:
-        yield {"object": "chat.session", "chat_id": chat_id}
+        yield {"object": "chat.session", "chat_id": chat_id, "conversation_id": new_conv_id}
 
 
 # ── Image chat helpers ───────────────────────────────────────────────────────
@@ -263,6 +268,140 @@ def stream_image_chat_completion(image_outputs: Iterable[ImageOutput], model: st
     yield completion_chunk(model, {}, "stop", completion_id, created)
 
 
+# ── Vision helpers (image-in → text or image-out) ────────────────────────────
+
+def _wrap_vision_stream(
+    outputs: Iterator[ImageOutput],
+    model: str,
+    chat_id: str,
+    is_new_session: bool,
+) -> Iterator[dict[str, Any]]:
+    """Convert ImageOutput stream from vision pipeline into chat completion chunks.
+
+    Handles both text responses (progress/message kinds) and generated image
+    responses (result kind — yields the saved URL as content).
+    Saves conversation_id to session after stream is consumed.
+    """
+    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+    created = int(time.time())
+    sent_role = False
+    sent_text = ""
+    conv_id = ""
+
+    for output in outputs:
+        if output.conversation_id:
+            conv_id = output.conversation_id
+
+        content = ""
+        if output.kind == "progress" and output.text:
+            content = output.text
+            sent_text += content
+        elif output.kind == "result" and output.data:
+            # Image was generated — yield the saved URL
+            url = str(output.data[-1].get("url") or "") if output.data else ""
+            content = url
+        elif output.kind == "message":
+            content = output.text[len(sent_text):] if output.text.startswith(sent_text) else output.text
+
+        if not content:
+            continue
+        if not sent_role:
+            sent_role = True
+            yield completion_chunk(model, {"role": "assistant", "content": content}, None, completion_id, created)
+        else:
+            yield completion_chunk(model, {"content": content}, None, completion_id, created)
+
+    if not sent_role:
+        yield completion_chunk(model, {"role": "assistant", "content": ""}, None, completion_id, created)
+    yield completion_chunk(model, {}, "stop", completion_id, created)
+
+    if conv_id:
+        chat_session_service.save_conversation_id(chat_id, conv_id)
+    if is_new_session and conv_id:
+        yield {"object": "chat.session", "chat_id": chat_id, "conversation_id": conv_id}
+
+
+def _stream_vision_with_session(
+    body: dict[str, Any],
+    chat_id: str,
+    is_new_session: bool,
+    prior_conversation_id: str,
+) -> Iterator[dict[str, Any]]:
+    model = str(body.get("model") or "auto").strip() or "auto"
+    base_url = str(body.get("base_url") or "") or None
+    messages = normalize_messages(chat_messages_from_body(body))
+    send_messages = messages if is_new_session else _continuation_messages(messages)
+
+    request = ConversationRequest(
+        model=model,
+        messages=send_messages,
+        conversation_id=prior_conversation_id,
+        history_and_training_disabled=False,
+        base_url=base_url,
+        response_format="url",
+    )
+    outputs = stream_vision_outputs_with_pool(request)
+    yield from _wrap_vision_stream(outputs, model, chat_id, is_new_session)
+
+
+def _vision_response_with_session(
+    body: dict[str, Any],
+    chat_id: str,
+    is_new_session: bool,
+    prior_conversation_id: str,
+) -> dict[str, Any]:
+    """Non-streaming vision: returns text content or image URL depending on what
+    ChatGPT returned, always including the real conversation_id.
+    """
+    model = str(body.get("model") or "auto").strip() or "auto"
+    base_url = str(body.get("base_url") or "") or None
+    messages = normalize_messages(chat_messages_from_body(body))
+    send_messages = messages if is_new_session else _continuation_messages(messages)
+
+    request = ConversationRequest(
+        model=model,
+        messages=send_messages,
+        conversation_id=prior_conversation_id,
+        history_and_training_disabled=False,
+        base_url=base_url,
+        response_format="url",
+    )
+    outputs = list(stream_vision_outputs_with_pool(request))
+
+    # Extract conversation_id from whichever output carries it
+    conv_id = next((o.conversation_id for o in reversed(outputs) if o.conversation_id), "")
+    if conv_id:
+        chat_session_service.save_conversation_id(chat_id, conv_id)
+
+    result = collect_image_outputs(iter(outputs))
+    result.pop("_upstream_conversation_id", None)
+
+    if result.get("data"):
+        # Image was generated — return the URL of the last image only
+        last_item = result["data"][-1]
+        url = str(last_item.get("url") or "")
+        resp = completion_response(
+            model, url,
+            messages=send_messages,
+            chat_id=chat_id if is_new_session and conv_id else None,
+            conversation_id=conv_id or None,
+        )
+        resp["image_url"] = url
+        resp["response_type"] = "image"
+        return resp
+
+    # Text response
+    content = str(result.get("message") or "")
+    resp = completion_response(
+        model, content,
+        messages=send_messages,
+        chat_id=chat_id if is_new_session and conv_id else None,
+        conversation_id=conv_id or None,
+    )
+    resp["response_type"] = "text"
+    return resp
+
+
 # ── Main handler ─────────────────────────────────────────────────────────────
 
 def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
@@ -271,18 +410,25 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     if is_new_session:
         chat_id = chat_session_service.generate_id()
 
-    # ── Image requests ─────────────────────────────────────────────────────
-    if is_image_chat_request(body):
-        return image_chat_events(body) if body.get("stream") else image_chat_response(body)
-
-    # ── Text chat: use real ChatGPT conversation_id so chats are visible ──
-    model, new_messages = text_chat_parts(body)
-
-    # Retrieve stored conversation_id for existing sessions
+    # Retrieve stored conversation_id for existing sessions (used by all branches)
     prior_conversation_id: str = (
         chat_session_service.get_conversation_id(chat_id)
         if not is_new_session else ""
     ) or ""
+
+    # ── Image generation (explicit gpt-image-2 model or modalities=image) ──
+    if is_image_chat_request(body):
+        return image_chat_events(body) if body.get("stream") else image_chat_response(body)
+
+    # ── Vision: image content in messages + regular model ──────────────────
+    # Send to ChatGPT with the image attached; auto-detect text vs image response.
+    if has_vision_content(body):
+        if body.get("stream"):
+            return _stream_vision_with_session(body, chat_id, is_new_session, prior_conversation_id)
+        return _vision_response_with_session(body, chat_id, is_new_session, prior_conversation_id)
+
+    # ── Text chat: use real ChatGPT conversation_id ────────────────────────
+    model, new_messages = text_chat_parts(body)
 
     if body.get("stream"):
         return _stream_text_with_session(
@@ -312,4 +458,5 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     return completion_response(
         model, content, messages=send_messages,
         chat_id=chat_id if is_new_session and new_conv_id else None,
+        conversation_id=new_conv_id or None,
     )

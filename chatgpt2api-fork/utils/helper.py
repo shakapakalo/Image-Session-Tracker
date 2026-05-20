@@ -102,6 +102,30 @@ def is_image_chat_request(body: dict[str, object]) -> bool:
     return isinstance(modalities, list) and "image" in {str(item or "").strip().lower() for item in modalities}
 
 
+def has_vision_content(body: dict[str, object]) -> bool:
+    """Return True when *body* carries image_url content parts (OpenAI vision format)
+    AND the model is NOT an explicit image-generation model.
+
+    This distinguishes "vision" requests (image-in → text or auto-image out) from
+    "image-generation" requests (text-in → image out via gpt-image-2 pipeline).
+    """
+    model = str(body.get("model") or "").strip()
+    if model in IMAGE_MODELS:
+        return False
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return False
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") in {"image_url", "image"}:
+                    return True
+    return False
+
+
 _UPSTREAM_BODY_LOG_LIMIT = 500
 
 

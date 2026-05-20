@@ -320,6 +320,25 @@ class OpenAIBackendAPI:
                     mime = str(part.get("mime") or "image/png")
                     if isinstance(data, (bytes, bytearray)):
                         image_inputs.append((bytes(data), mime))
+                elif part_type == "image_url":
+                    # OpenAI-standard vision format: {"type": "image_url", "image_url": {"url": "..."}}
+                    url_obj = part.get("image_url") or {}
+                    url = str(url_obj.get("url") if isinstance(url_obj, dict) else url_obj or "")
+                    if url.startswith("data:"):
+                        header, _, b64_data = url.partition(",")
+                        mime = header.split(";")[0].removeprefix("data:") or "image/png"
+                        try:
+                            image_inputs.append((base64.b64decode(b64_data), mime))
+                        except Exception:
+                            pass
+                    elif url.startswith(("http://", "https://")):
+                        try:
+                            img_resp = self.session.get(url, timeout=30)
+                            if 200 <= img_resp.status_code < 300:
+                                ctype = str(img_resp.headers.get("content-type", "image/png")).split(";")[0].strip()
+                                image_inputs.append((img_resp.content, ctype or "image/png"))
+                        except Exception:
+                            pass
             if not image_inputs:
                 conversation_messages.append({
                     "id": new_uuid(),
