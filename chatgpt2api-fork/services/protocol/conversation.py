@@ -569,6 +569,9 @@ def stream_image_outputs(
         index: int = 1,
         total: int = 1,
 ) -> Iterator[ImageOutput]:
+    # Capture time just before the request so _poll_image_results can skip
+    # image records from *previous* turns in the same conversation.
+    request_time = time.time()
     last: dict[str, Any] = {}
     for event in conversation_events(
             backend,
@@ -617,7 +620,8 @@ def stream_image_outputs(
         yield ImageOutput(kind="message", model=request.model, index=index, total=total, text=message)
         return
 
-    image_urls = backend.resolve_conversation_image_urls(conversation_id, file_ids, sediment_ids)
+    image_urls = backend.resolve_conversation_image_urls(
+        conversation_id, file_ids, sediment_ids, min_create_time=request_time)
     if image_urls:
         image_items = [
             {"b64_json": base64.b64encode(image_data).decode("ascii")}
@@ -715,6 +719,7 @@ def stream_vision_outputs(
     After ChatGPT replies, inspects whether it returned plain text or invoked
     the image tool and yields the appropriate ImageOutput kind.
     """
+    request_time = time.time()
     last: dict[str, Any] = {}
     for event in conversation_events(
         backend,
@@ -771,7 +776,8 @@ def stream_vision_outputs(
         )
         return
 
-    image_urls = backend.resolve_conversation_image_urls(conversation_id, file_ids, sediment_ids)
+    image_urls = backend.resolve_conversation_image_urls(
+        conversation_id, file_ids, sediment_ids, min_create_time=request_time)
     if image_urls:
         image_items = [
             {"b64_json": base64.b64encode(image_data).decode("ascii")}

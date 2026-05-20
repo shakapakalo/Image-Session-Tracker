@@ -689,7 +689,7 @@ class OpenAIBackendAPI:
                  "sediment_ids": sediment_ids})
         return sorted(records, key=lambda item: item["create_time"])
 
-    def _poll_image_results(self, conversation_id: str, timeout_secs: float = 120.0) -> tuple[list[str], list[str]]:
+    def _poll_image_results(self, conversation_id: str, timeout_secs: float = 120.0, min_create_time: float = 0.0) -> tuple[list[str], list[str]]:
         """Poll the conversation document until image file ids appear or budget runs out.
 
         - Sleeps image_poll_initial_wait_secs first (default 10s, +jitter). ChatGPT
@@ -762,6 +762,9 @@ class OpenAIBackendAPI:
 
             file_ids, sediment_ids = [], []
             for record in self._extract_image_tool_records(conversation):
+                # Skip records that predate this request — they are from previous turns
+                if min_create_time > 0 and record["create_time"] < min_create_time:
+                    continue
                 for file_id in record["file_ids"]:
                     if file_id not in file_ids:
                         file_ids.append(file_id)
@@ -769,7 +772,7 @@ class OpenAIBackendAPI:
                     if sediment_id not in sediment_ids:
                         sediment_ids.append(sediment_id)
             logger.debug({"event": "image_poll_check", "conversation_id": conversation_id, "attempt": attempt,
-                          "file_ids": file_ids, "sediment_ids": sediment_ids})
+                          "file_ids": file_ids, "sediment_ids": sediment_ids, "min_create_time": min_create_time})
             if file_ids:
                 logger.info({"event": "image_poll_hit", "conversation_id": conversation_id, "file_ids": file_ids,
                              "sediment_ids": sediment_ids})
@@ -893,13 +896,15 @@ class OpenAIBackendAPI:
             file_ids: list[str],
             sediment_ids: list[str],
             poll: bool = True,
+            min_create_time: float = 0.0,
     ) -> list[str]:
         file_ids = [item for item in file_ids if item != "file_upload"]
         sediment_ids = list(sediment_ids)
         if poll and conversation_id and not file_ids and not sediment_ids:
-            logger.info({"event": "image_resolve_poll_needed", "conversation_id": conversation_id})
-            polled_file_ids, polled_sediment_ids = self._poll_image_results(conversation_id,
-                                                                            config.image_poll_timeout_secs)
+            logger.info({"event": "image_resolve_poll_needed", "conversation_id": conversation_id,
+                         "min_create_time": min_create_time})
+            polled_file_ids, polled_sediment_ids = self._poll_image_results(
+                conversation_id, config.image_poll_timeout_secs, min_create_time=min_create_time)
             file_ids.extend(item for item in polled_file_ids if item and item not in file_ids)
             sediment_ids.extend(item for item in polled_sediment_ids if item and item not in sediment_ids)
         return self._resolve_image_urls(conversation_id, file_ids, sediment_ids)
