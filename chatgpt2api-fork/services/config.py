@@ -213,6 +213,14 @@ class ConfigStore:
             return 5
 
     @property
+    def image_retention_minutes(self) -> int:
+        """How long to keep locally saved images before auto-deletion (minutes). Default: 10."""
+        try:
+            return max(1, int(self.data.get("image_retention_minutes", 10)))
+        except (TypeError, ValueError):
+            return 10
+
+    @property
     def image_retention_days(self) -> int:
         try:
             return max(1, int(self.data.get("image_retention_days", 30)))
@@ -299,12 +307,16 @@ class ConfigStore:
         return path
 
     def cleanup_old_images(self) -> int:
-        cutoff = time.time() - self.image_retention_days * 86400
+        """Delete images older than image_retention_minutes. Also prunes empty dirs."""
+        cutoff = time.time() - self.image_retention_minutes * 60
         removed = 0
         for path in self.images_dir.rglob("*"):
             if path.is_file() and path.stat().st_mtime < cutoff:
-                path.unlink()
-                removed += 1
+                try:
+                    path.unlink()
+                    removed += 1
+                except OSError:
+                    pass
         for path in sorted((p for p in self.images_dir.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
             try:
                 path.rmdir()

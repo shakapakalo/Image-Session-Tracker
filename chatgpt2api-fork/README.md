@@ -24,6 +24,17 @@
 
 已发布镜像支持 `linux/amd64` 与 `linux/arm64`，在 x86 服务器和 Apple Silicon / ARM Linux 设备上都会自动拉取匹配架构的版本。
 
+### Key behaviours (fork additions)
+
+| Feature | Detail |
+|---|---|
+| **Image auto-delete** | Generated images are deleted from the VPS after **10 minutes** (configurable via `image_retention_minutes` in `config.json`). Cleanup runs every 5 minutes in the background. |
+| **URL-only image responses** | All image endpoints (`/v1/images/generations`, `/v1/images/edits`) always return a hosted **URL** — never base64. Only the **most recently generated image** is returned (last item in `data[]`). |
+| **Chat sessions in ChatGPT app** | `/v1/chat/completions` text chat uses a real ChatGPT `conversation_id` (`history_and_training_disabled=false`). Each API chat session appears as a visible conversation inside the ChatGPT web interface — just like image sessions. |
+| **chat_id session tracking** | Both text chat and image endpoints support `chat_id` for multi-turn continuity (see below). |
+
+---
+
 ### chat_id — Session Tracking (Text Chat & Images)
 
 Both `/v1/chat/completions` (text) and `/v1/images/generations` (images) support an optional `chat_id` field for persistent multi-turn sessions.
@@ -38,8 +49,8 @@ Both `/v1/chat/completions` (text) and `/v1/images/generations` (images) support
 ```python
 import requests
 
-BASE = "http://localhost:8000"
-KEY  = "chatgpt2api"
+BASE = "http://217.77.8.115"   # or localhost:8000 locally
+KEY  = "ranaji"
 
 # ── Turn 1: new session ─────────────────────────────────
 r1 = requests.post(f"{BASE}/v1/chat/completions",
@@ -47,8 +58,9 @@ r1 = requests.post(f"{BASE}/v1/chat/completions",
     json={"model": "auto",
           "messages": [{"role": "user", "content": "My name is Rana. Remember it."}]})
 data1 = r1.json()
-chat_id = data1["chat_id"]                  # e.g. "0cf317d1-..."
+chat_id = data1["chat_id"]                         # e.g. "0cf317d1-..."
 print(data1["choices"][0]["message"]["content"])   # GPT acknowledges
+# ✅ This conversation also appears in your ChatGPT web app
 
 # ── Turn 2: continue same session ──────────────────────
 r2 = requests.post(f"{BASE}/v1/chat/completions",
@@ -60,6 +72,19 @@ print(r2.json()["choices"][0]["message"]["content"])  # "Tumhara naam Rana hai."
 ```
 
 Sessions expire after **24 hours** of inactivity and are saved to `data/chat_sessions.json` (survives restarts).
+
+**Image URL example**
+
+```python
+r = requests.post(f"{BASE}/v1/images/generations",
+    headers={"Authorization": f"Bearer {KEY}"},
+    json={"model": "gpt-image-2",
+          "prompt": "A warrior in red armour",
+          "n": 1})
+data = r.json()
+print(data["data"][0]["url"])   # https://your-server/images/...  (always URL, never base64)
+print(data["chat_id"])          # session ID — pass this back for style continuity
+```
 
 ---
 
@@ -79,24 +104,60 @@ What the script does automatically:
 - Installs `uv` (Python package manager) and Python 3.13
 - Clones repo → `/opt/chatgpt2api-repo/chatgpt2api-fork`
 - Installs all dependencies
+- Builds the web panel and creates the `web_dist` symlink
 - Creates a systemd service (auto-restarts on crash/reboot)
 - Configures Nginx as a reverse proxy on port 80
 
 After deploy — **add your ChatGPT token**:
 
 ```bash
-curl -X POST http://localhost:8000/api/accounts \
+curl -X POST http://localhost/api/accounts \
   -H "Authorization: Bearer ranaji" \
   -H "Content-Type: application/json" \
   -d '{"tokens":["YOUR_CHATGPT_ACCESS_TOKEN"]}'
 ```
 
-Useful commands:
+**VPS management commands (run on the server via SSH)**
+
 ```bash
-systemctl status chatgpt2api      # check service status
-journalctl -u chatgpt2api -f      # live logs
-systemctl restart chatgpt2api     # restart
+# ── Status & logs ──────────────────────────────────────
+systemctl status chatgpt2api          # service health
+journalctl -u chatgpt2api -f          # live logs (Ctrl+C to exit)
+journalctl -u chatgpt2api --since "1 hour ago"
+
+# ── Restart / stop / start ─────────────────────────────
+systemctl restart chatgpt2api         # apply code changes or fix crashes
+systemctl stop chatgpt2api
+systemctl start chatgpt2api
+
+# ── Pull latest code from GitHub and restart ───────────
+cd /opt/chatgpt2api-repo
+git pull
+cd chatgpt2api-fork
+uv sync --no-dev
+ln -sfn web/out web_dist 2>/dev/null || true
+systemctl restart chatgpt2api
+
+# ── Check the API is responding ────────────────────────
+curl -s http://localhost/v1/models \
+  -H "Authorization: Bearer ranaji" | python3 -m json.tool
+
+# ── View / change config ───────────────────────────────
+cat /opt/chatgpt2api-repo/chatgpt2api-fork/data/config.json 2>/dev/null
+# Edit image_retention_minutes (default 10), etc.:
+nano /opt/chatgpt2api-repo/chatgpt2api-fork/data/config.json
+systemctl restart chatgpt2api
+
+# ── Nginx ──────────────────────────────────────────────
+systemctl status nginx
+nginx -t && systemctl reload nginx
 ```
+
+**Open the web panel**
+
+After deploy, open in your browser: **`http://217.77.8.115/`** (port 80, through Nginx)
+
+If you want direct port access: open TCP port 7637 in Contabo's customer portal firewall, then use `http://217.77.8.115:7637/`.
 
 ---
 

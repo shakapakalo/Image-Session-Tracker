@@ -219,6 +219,7 @@ class ConversationRequest:
     base_url: str | None = None
     message_as_error: bool = False
     conversation_id: str = ""
+    history_and_training_disabled: bool = True
 
 
 @dataclass
@@ -481,6 +482,7 @@ def conversation_events(
     images: list[str] | None = None,
     size: str | None = None,
     conversation_id: str = "",
+    history_and_training_disabled: bool = True,
 ) -> Iterator[dict[str, Any]]:
     normalized = normalize_messages(messages or ([{"role": "user", "content": prompt}] if prompt else []))
     image_model = str(model or "").strip() in IMAGE_MODELS
@@ -494,6 +496,7 @@ def conversation_events(
         images=images if image_model else None,
         system_hints=["picture_v2"] if image_model else None,
         conversation_id=conversation_id,
+        history_and_training_disabled=history_and_training_disabled,
     )
     yield from iter_conversation_payloads(payloads, history_text, history_messages)
 
@@ -529,6 +532,7 @@ def stream_text_deltas(
                 model=request.model,
                 prompt=request.prompt,
                 conversation_id=request.conversation_id,
+                history_and_training_disabled=request.history_and_training_disabled,
             ):
                 if event.get("conversation_id"):
                     last_conv_id = str(event["conversation_id"])

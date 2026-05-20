@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from contextlib import asynccontextmanager
 from threading import Event
 
@@ -12,6 +13,21 @@ from api.support import resolve_web_asset, start_limited_account_watcher
 from services.backup_service import backup_service
 from services.config import config
 
+IMAGE_CLEANUP_INTERVAL_SECS = 5 * 60  # run cleanup every 5 minutes
+
+
+def _start_image_cleanup_thread(stop_event: Event) -> threading.Thread:
+    def _loop() -> None:
+        while not stop_event.wait(timeout=IMAGE_CLEANUP_INTERVAL_SECS):
+            try:
+                config.cleanup_old_images()
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_loop, daemon=True, name="image-cleanup")
+    t.start()
+    return t
+
 
 def create_app() -> FastAPI:
     app_version = config.app_version
@@ -19,14 +35,16 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         stop_event = Event()
-        thread = start_limited_account_watcher(stop_event)
+        account_thread = start_limited_account_watcher(stop_event)
+        cleanup_thread = _start_image_cleanup_thread(stop_event)
         backup_service.start()
         config.cleanup_old_images()
         try:
             yield
         finally:
             stop_event.set()
-            thread.join(timeout=1)
+            account_thread.join(timeout=1)
+            cleanup_thread.join(timeout=1)
             backup_service.stop()
 
     app = FastAPI(title="chatgpt2api", version=app_version, lifespan=lifespan)

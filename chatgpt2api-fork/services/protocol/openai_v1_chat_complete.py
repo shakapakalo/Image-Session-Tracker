@@ -128,14 +128,17 @@ def text_chat_parts(body: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     return model, messages
 
 
-def _build_full_messages(
-    history: list[dict[str, Any]],
-    new_messages: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Prepend stored history to the caller's new messages, deduplicating."""
-    if not history:
-        return new_messages
-    return list(history) + list(new_messages)
+def _continuation_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """For conversation_id continuation: return system messages + last user turn only.
+
+    ChatGPT already holds the prior history server-side, so sending only the new
+    message avoids duplicating earlier turns in the conversation.
+    """
+    sys_msgs = [m for m in messages if m.get("role") == "system"]
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "user":
+            return sys_msgs + [messages[i]]
+    return messages
 
 
 def _stream_text_with_session(
@@ -143,16 +146,27 @@ def _stream_text_with_session(
     model: str,
     chat_id: str,
     is_new_session: bool,
+    prior_conversation_id: str,
 ) -> Iterator[dict[str, Any]]:
-    """Stream chat completion chunks and persist session history afterward."""
+    """Stream chat completion chunks.
+
+    Uses a real ChatGPT conversation_id so each API chat appears as a
+    session inside the ChatGPT web app, just like image sessions do.
+    """
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
     sent_role = False
-    reply_parts: list[str] = []
 
-    request = ConversationRequest(model=model, messages=messages)
-    for delta_text in stream_text_deltas(text_backend(), request):
-        reply_parts.append(delta_text)
+    send_messages = messages if is_new_session else _continuation_messages(messages)
+
+    conv_id_out: list[str] = []
+    request = ConversationRequest(
+        model=model,
+        messages=send_messages,
+        conversation_id=prior_conversation_id,
+        history_and_training_disabled=False,  # visible in ChatGPT app
+    )
+    for delta_text in stream_text_deltas(text_backend(), request, conv_id_out):
         if not sent_role:
             sent_role = True
             yield completion_chunk(model, {"role": "assistant", "content": delta_text}, None, completion_id, created)
@@ -163,14 +177,13 @@ def _stream_text_with_session(
         yield completion_chunk(model, {"role": "assistant", "content": ""}, None, completion_id, created)
     yield completion_chunk(model, {}, "stop", completion_id, created)
 
-    # Persist updated history after stream ends
-    reply_text = "".join(reply_parts)
-    if reply_text:
-        updated_history = list(messages) + [{"role": "assistant", "content": reply_text}]
-        chat_session_service.save_history(chat_id, updated_history)
+    # Persist conversation_id so follow-up requests continue the same chat
+    new_conv_id = conv_id_out[0] if conv_id_out else ""
+    if new_conv_id:
+        chat_session_service.save_conversation_id(chat_id, new_conv_id)
 
     # Emit session chunk for new sessions so streaming clients can capture chat_id
-    if is_new_session and reply_text:
+    if is_new_session and new_conv_id:
         yield {"object": "chat.session", "chat_id": chat_id}
 
 
@@ -201,9 +214,14 @@ def image_chat_response(body: dict[str, Any]) -> dict[str, Any]:
         prompt=prompt,
         model=model,
         n=n,
-        response_format="b64_json",
+        response_format="url",  # always URL — no base64
         images=encode_images(images) or None,
     )))
+    # Return only the most recently generated image
+    data = result.get("data")
+    if isinstance(data, list) and data:
+        result = dict(result)
+        result["data"] = [data[-1]]
     return completion_response(model, image_result_content(result), int(result.get("created") or 0) or None)
 
 
@@ -213,7 +231,7 @@ def image_chat_events(body: dict[str, Any]) -> Iterator[dict[str, Any]]:
         prompt=prompt,
         model=model,
         n=n,
-        response_format="b64_json",
+        response_format="url",  # always URL — no base64
         images=encode_images(images) or None,
     ))
     yield from stream_image_chat_completion(image_outputs, model)
@@ -253,37 +271,45 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     if is_new_session:
         chat_id = chat_session_service.generate_id()
 
-    # ── Image requests: chat_id not needed (no cross-request context) ──────
-    if body.get("stream"):
-        if is_image_chat_request(body):
-            return image_chat_events(body)
+    # ── Image requests ─────────────────────────────────────────────────────
+    if is_image_chat_request(body):
+        return image_chat_events(body) if body.get("stream") else image_chat_response(body)
 
-        model, new_messages = text_chat_parts(body)
-        history = chat_session_service.get_history(chat_id) if not is_new_session else []
-        full_messages = _build_full_messages(history, new_messages)
+    # ── Text chat: use real ChatGPT conversation_id so chats are visible ──
+    model, new_messages = text_chat_parts(body)
+
+    # Retrieve stored conversation_id for existing sessions
+    prior_conversation_id: str = (
+        chat_session_service.get_conversation_id(chat_id)
+        if not is_new_session else ""
+    ) or ""
+
+    if body.get("stream"):
         return _stream_text_with_session(
-            messages=full_messages,
+            messages=new_messages,
             model=model,
             chat_id=chat_id,
             is_new_session=is_new_session,
+            prior_conversation_id=prior_conversation_id,
         )
 
-    if is_image_chat_request(body):
-        return image_chat_response(body)
+    # Non-streaming text chat
+    send_messages = new_messages if is_new_session else _continuation_messages(new_messages)
 
-    # ── Non-streaming text chat ────────────────────────────────────────────
-    model, new_messages = text_chat_parts(body)
-    history = chat_session_service.get_history(chat_id) if not is_new_session else []
-    full_messages = _build_full_messages(history, new_messages)
+    conv_id_out: list[str] = []
+    request = ConversationRequest(
+        model=model,
+        messages=send_messages,
+        conversation_id=prior_conversation_id,
+        history_and_training_disabled=False,  # visible in ChatGPT app
+    )
+    content = "".join(stream_text_deltas(text_backend(), request, conv_id_out))
 
-    request = ConversationRequest(model=model, messages=full_messages)
-    content = "".join(stream_text_deltas(text_backend(), request))
-
-    if content:
-        updated_history = list(full_messages) + [{"role": "assistant", "content": content}]
-        chat_session_service.save_history(chat_id, updated_history)
+    new_conv_id = conv_id_out[0] if conv_id_out else ""
+    if new_conv_id:
+        chat_session_service.save_conversation_id(chat_id, new_conv_id)
 
     return completion_response(
-        model, content, messages=full_messages,
-        chat_id=chat_id if is_new_session and content else None,
+        model, content, messages=send_messages,
+        chat_id=chat_id if is_new_session and new_conv_id else None,
     )

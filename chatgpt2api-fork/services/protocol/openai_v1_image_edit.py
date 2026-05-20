@@ -31,13 +31,22 @@ def _wrap_stream_with_chat_id(
         yield {"object": "image.generation.session", "chat_id": chat_id}
 
 
+def _keep_last_image(result: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of *result* containing only the most recently generated image URL."""
+    data = result.get("data")
+    if isinstance(data, list) and data:
+        result = dict(result)
+        result["data"] = [data[-1]]
+    return result
+
+
 def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     prompt = str(body.get("prompt") or "")
     images = body.get("images") or []
     model = str(body.get("model") or "gpt-image-2")
     n = int(body.get("n") or 1)
     size = body.get("size")
-    response_format = str(body.get("response_format") or "b64_json")
+    response_format = "url"  # always return a URL — never base64
     base_url = str(body.get("base_url") or "") or None
 
     chat_id = str(body.get("chat_id") or "").strip()
@@ -74,6 +83,7 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     upstream_conversation_id = result.pop("_upstream_conversation_id", "")
     if upstream_conversation_id:
         chat_session_service.save_conversation_id(chat_id, upstream_conversation_id)
+    result = _keep_last_image(result)
     if is_new_session and result.get("data"):
         result["chat_id"] = chat_id
     return result

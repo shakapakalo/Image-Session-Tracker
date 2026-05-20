@@ -370,6 +370,7 @@ class OpenAIBackendAPI:
         model: str,
         timezone: str,
         conversation_id: str = "",
+        history_and_training_disabled: bool = True,
     ) -> Dict[str, Any]:
         """把标准 messages 构造成 web 对话请求体。"""
         payload: Dict[str, Any] = {
@@ -383,7 +384,7 @@ class OpenAIBackendAPI:
             "force_paragen_model_slug": "",
             "force_rate_limit": False,
             "force_use_sse": True,
-            "history_and_training_disabled": True,
+            "history_and_training_disabled": history_and_training_disabled,
             "reset_rate_limits": False,
             "suggestions": [],
             "supported_encodings": [],
@@ -900,6 +901,7 @@ class OpenAIBackendAPI:
             images: Optional[list[str]] = None,
             system_hints: Optional[list[str]] = None,
             conversation_id: str = "",
+            history_and_training_disabled: bool = True,
     ) -> Iterator[str]:
         system_hints = system_hints or []
         if "picture_v2" in system_hints:
@@ -910,7 +912,7 @@ class OpenAIBackendAPI:
         self._bootstrap()
         requirements = self._get_chat_requirements()
         path, timezone = self._chat_target()
-        payload = self._conversation_payload(normalized, model, timezone, conversation_id)
+        payload = self._conversation_payload(normalized, model, timezone, conversation_id, history_and_training_disabled)
         response = self.session.post(
             self.base_url + path,
             headers=self._conversation_headers(path, requirements),
