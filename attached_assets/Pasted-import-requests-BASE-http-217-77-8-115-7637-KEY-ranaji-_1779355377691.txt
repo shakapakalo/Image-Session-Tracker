@@ -1,0 +1,54 @@
+import requests
+
+BASE = "http://217.77.8.115:7637"
+KEY  = "ranaji"
+
+HDR  = {"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"}
+
+# ── Turn 1: Public URL image + question ─────────────────────────────────────
+r1 = requests.post(f"{BASE}/v1/chat/completions",
+    headers=HDR,
+    json={
+        "model": "gpt-4o",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "https://scontent.fkhi4-3.fna.fbcdn.net/v/t51.82787-15/673855649_18583976926063449_1160154500473545079_n.jpg?_nc_cat=1&ccb=1-7&_nc_sid=127cfc&_nc_eui2=AeFNDLYHILjbo4a_3aCHfUMvXzT8uI7qiV5fNPy4juqJXsx1QB4eUEF6DnqrQe2Zqr5mqnLojTRJDT9r8c7e9bBL&_nc_ohc=cQE3aC58K68Q7kNvwERksTT&_nc_oc=AdpMEWNSuBqsC3ki_0jXaffk5y2Ty4KEIY3IdwLq9FKLvN5dfKl7MEgeOL-cKAHDaTw&_nc_zt=23&_nc_ht=scontent.fkhi4-3.fna&_nc_gid=VGcvmWRjv9xlDmDyMRH1PA&_nc_ss=7b2a8&oh=00_Af5yi4Ujnq4TIyMqEDRekbhssqypnjdsyC-THzGpvgQHZA&oe=6A149911g"
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": "What is in this image? Describe it."
+                }
+            ]
+        }]
+    },
+    timeout=90)
+
+data1 = r1.json()
+print("=== Vision Turn 1 ===")
+print("Reply  :", data1["choices"][0]["message"]["content"])
+print("chat_id:", data1.get("chat_id"))
+
+chat_id = data1.get("chat_id")
+
+# ── Turn 2: Same conversation, follow-up question (no image needed) ──────────
+r2 = requests.post(f"{BASE}/v1/chat/completions",
+    headers=HDR,
+    json={
+        "model": "gpt-4o",
+        "chat_id": chat_id,
+        "messages": [{
+            "role": "user",
+            "content": "What color is it?"
+        }]
+    },
+    timeout=90)
+
+data2 = r2.json()
+print("\n=== Vision Turn 2 (follow-up, same session) ===")
+print("Reply  :", data2["choices"][0]["message"]["content"])
+print("chat_id:", data2.get("chat_id"))

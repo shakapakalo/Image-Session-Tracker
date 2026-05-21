@@ -307,6 +307,25 @@ def extract_prompt_from_message_content(content: object) -> str:
     return "\n".join(parts).strip()
 
 
+def _download_image_url(url: str) -> tuple[bytes, str] | None:
+    """Download an image from an HTTP/HTTPS URL and return (bytes, mime_type).
+    Returns None on any failure so the caller can skip silently.
+    """
+    try:
+        resp = requests.get(url, timeout=30, allow_redirects=True)
+        if resp.status_code != 200:
+            logger.warning({"event": "image_url_download_failed",
+                            "url": url[:120], "status": resp.status_code})
+            return None
+        content_type = str(resp.headers.get("content-type") or "image/png").split(";")[0].strip()
+        if not content_type.startswith("image/"):
+            content_type = "image/png"
+        return bytes(resp.content), content_type
+    except Exception as exc:
+        logger.warning({"event": "image_url_download_error", "url": url[:120], "error": str(exc)})
+        return None
+
+
 def extract_image_from_message_content(content: object) -> list[tuple[bytes, str]]:
     if not isinstance(content, list):
         return []
@@ -322,12 +341,20 @@ def extract_image_from_message_content(content: object) -> list[tuple[bytes, str
                 header, _, data = url.partition(",")
                 mime = header.split(";")[0].removeprefix("data:")
                 images.append((base64.b64decode(data), mime or "image/png"))
+            elif url.startswith(("http://", "https://")):
+                result = _download_image_url(url)
+                if result:
+                    images.append(result)
         elif item_type == "input_image":
             image_url = str(item.get("image_url") or "")
             if image_url.startswith("data:"):
                 header, _, data = image_url.partition(",")
                 mime = header.split(";")[0].removeprefix("data:")
                 images.append((base64.b64decode(data), mime or "image/png"))
+            elif image_url.startswith(("http://", "https://")):
+                result = _download_image_url(image_url)
+                if result:
+                    images.append(result)
     return images
 
 
