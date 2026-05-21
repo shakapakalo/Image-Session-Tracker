@@ -1,0 +1,52 @@
+0 20:26:14 2026 from 223.123.54.15
+root@vmi3086586:~# journalctl -u chatgpt2api -n 50 --no-pager
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     ^
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     return await self.app(scope, receive, send)
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/fastapi/applications.py", line 1159, in __call__
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     await super().__call__(scope, receive, send)
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/starlette/applications.py", line 90, in __call__
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     await self.middleware_stack(scope, receive, send)
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/starlette/middleware/errors.py", line 186, in __call__
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     raise exc
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/starlette/middleware/errors.py", line 164, in __call__
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     await self.app(scope, receive, _send)
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/starlette/middleware/cors.py", line 88, in __call__
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     await self.app(scope, receive, send)
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     raise exc
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     await app(scope, receive, sender)
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     await self.app(scope, receive, send)
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/starlette/routing.py", line 660, in __call__
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     await self.middleware_stack(scope, receive, send)
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/starlette/routing.py", line 680, in app
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     await route.handle(scope, receive, send)
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/starlette/routing.py", line 276, in handle
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     await self.app(scope, receive, send)
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/fastapi/routing.py", line 134, in app
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     raise exc
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     await app(scope, receive, sender)
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/fastapi/routing.py", line 120, in app
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     response = await f(request)
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:                ^^^^^^^^^^^^^^^^
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/fastapi/routing.py", line 674, in app
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     raw_response = await run_endpoint_function(
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     ...<3 lines>...
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     )
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     ^
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/.venv/lib/python3.13/site-packages/fastapi/routing.py", line 328, in run_endpoint_functionMay 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     return await dependant.call(**values)
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:   File "/opt/chatgpt2api-repo/chatgpt2api-fork/api/ai.py", line 116, in create_chat_completion
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:     payload["base_url"] = resolve_image_base_url(request)
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]:                                                  ^^^^^^^
+May 21 11:07:48 vmi3086586 chatgpt2api[2145244]: NameError: name 'request' is not defined. Did you mean: 'Request'?
+root@vmi3086586:~#
